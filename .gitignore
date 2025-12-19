@@ -1,6 +1,8 @@
+# Environment variables
+.env
+
 # Output directory
 output/
-*.html
 
 # Python
 __pycache__/
@@ -19,11 +21,6 @@ ENV/
 *.swp
 *.swo
 *~
-
-# Configuration files with sensitive data
-config.py
-*.key
-*.secret
 
 # OS
 .DS_Store

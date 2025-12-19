@@ -1,26 +1,39 @@
 #!/usr/bin/env python3
 """
-Simple script to scrape Ed forum posts and generate a static website.
-No CLI arguments needed - just update the configuration below.
+One-time script to scrape Ed forum posts and generate a static website.
+Fetches posts with titles containing "special participation b" and displays them.
 """
 
 import os
 from datetime import datetime
-from edapi import EdAPI
+from pathlib import Path
+
+# Try to load from .env file if python-dotenv is available
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv not installed, skip .env file loading
+
+try:
+    from edapi import EdAPI
+except ImportError:
+    print("❌ Error: edapi is not installed. Please run: pip install -r requirements.txt")
+    exit(1)
 
 # ============================================================================
 # CONFIGURATION - Update these values
 # ============================================================================
 
 # Get your API token from: https://edstem.org/us/settings/api-tokens
-# You can set it as an environment variable ED_API_TOKEN or paste it here
-API_TOKEN = os.getenv('ED_API_TOKEN', 'YOUR_API_TOKEN_HERE')
+# You can set it as an environment variable ED_API_TOKEN or create a .env file
+API_TOKEN = os.getenv('ED_API_TOKEN')
 
 # Your course ID (you can find this in the Ed forum URL)
-COURSE_ID = 'YOUR_COURSE_ID_HERE'
+COURSE_ID = '84647'  # Update this with your course ID
 
-# Title prefix to filter posts
-TITLE_PREFIX = "Special Participation B: "
+# Title filter - will match any title containing this (case-insensitive)
+TITLE_FILTER = "special participation b"
 
 # Output directory for the static website
 OUTPUT_DIR = "output"
@@ -28,6 +41,49 @@ OUTPUT_DIR = "output"
 # ============================================================================
 # END CONFIGURATION
 # ============================================================================
+
+
+def escape_html(text):
+    """Escape HTML special characters."""
+    if not text:
+        return ""
+    return (str(text)
+            .replace('&', '&amp;')
+            .replace('<', '&lt;')
+            .replace('>', '&gt;')
+            .replace('"', '&quot;')
+            .replace("'", '&#x27;'))
+
+
+def format_date(date_str):
+    """Format ISO date string to readable format."""
+    if not date_str:
+        return "Unknown date"
+    try:
+        if isinstance(date_str, str):
+            # Handle ISO format with or without timezone
+            date_str = date_str.replace('Z', '+00:00')
+            dt = datetime.fromisoformat(date_str)
+            return dt.strftime('%B %d, %Y at %I:%M %p')
+    except Exception:
+        pass
+    return str(date_str)
+
+
+def parse_thread_content(content):
+    """Parse Ed's XML document format to plain text/HTML."""
+    if not content:
+        return ""
+    
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(content, 'xml')
+        # Extract text from the document, preserving some structure
+        text = soup.get_text(separator='\n', strip=True)
+        return text
+    except Exception:
+        # If parsing fails, return as-is
+        return str(content)
 
 
 def generate_static_website(threads, output_dir="output"):
@@ -39,30 +95,6 @@ def generate_static_website(threads, output_dir="output"):
         output_dir: Directory to output the static website
     """
     os.makedirs(output_dir, exist_ok=True)
-    
-    # Escape HTML in content
-    def escape_html(text):
-        if not text:
-            return ""
-        return (str(text)
-                .replace('&', '&amp;')
-                .replace('<', '&lt;')
-                .replace('>', '&gt;')
-                .replace('"', '&quot;')
-                .replace("'", '&#x27;'))
-    
-    # Format date
-    def format_date(date_str):
-        if not date_str:
-            return "Unknown date"
-        try:
-            # Try parsing ISO format
-            if isinstance(date_str, str):
-                dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-                return dt.strftime('%B %d, %Y at %I:%M %p')
-        except:
-            pass
-        return str(date_str)
     
     # Generate main index page
     html_content = f"""<!DOCTYPE html>
@@ -212,13 +244,24 @@ def generate_static_website(threads, output_dir="output"):
         html_content += """
         <div class="no-posts">
             <h2>No posts found</h2>
-            <p>No posts with titles starting with "Special Participation B: " were found.</p>
+            <p>No posts with titles containing "special participation b" were found.</p>
         </div>
 """
     else:
-        for thread in threads:
+        # Sort threads by created_at (newest first)
+        sorted_threads = sorted(
+            threads,
+            key=lambda x: x.get('created_at', ''),
+            reverse=True
+        )
+        
+        for thread in sorted_threads:
             title = escape_html(thread.get('title', 'Untitled'))
-            body = escape_html(thread.get('content', '') or thread.get('body', 'No content available'))
+            
+            # Get content - try document first, then content field
+            raw_content = thread.get('document') or thread.get('content') or ''
+            content = parse_thread_content(raw_content)
+            content = escape_html(content)
             
             # Get author information
             author_info = thread.get('user', {})
@@ -226,9 +269,10 @@ def generate_static_website(threads, output_dir="output"):
                 author = author_info.get('name', author_info.get('username', 'Unknown'))
             else:
                 author = str(author_info) if author_info else 'Unknown'
+            author = escape_html(author)
             
-            created = format_date(thread.get('created_at') or thread.get('created'))
-            updated = thread.get('updated_at') or thread.get('updated')
+            created = format_date(thread.get('created_at'))
+            updated = format_date(thread.get('updated_at'))
             comment_count = thread.get('comment_count', 0) or thread.get('num_comments', 0)
             vote_count = thread.get('vote_count', 0) or thread.get('upvotes', 0) or thread.get('votes', 0)
             
@@ -236,10 +280,10 @@ def generate_static_website(threads, output_dir="output"):
         <div class="post">
             <div class="post-title">{title}</div>
             <div class="post-meta">
-                <span>👤 {escape_html(author)}</span>
+                <span>👤 {author}</span>
                 <span>📅 {created}</span>
             </div>
-            <div class="post-content">{body}</div>
+            <div class="post-content">{content}</div>
             <div class="stats">
                 <span>💬 {comment_count} comments</span>
                 <span>👍 {vote_count} votes</span>
@@ -266,19 +310,23 @@ def main():
     """Main function to run the scraper and generate the static website."""
     
     # Validate configuration
-    if API_TOKEN == 'YOUR_API_TOKEN_HERE' or not API_TOKEN:
-        print("❌ Error: Please set your ED_API_TOKEN environment variable or update API_TOKEN in the script")
+    if not API_TOKEN:
+        print("❌ Error: ED_API_TOKEN environment variable is not set")
         print("   Get your token from: https://edstem.org/us/settings/api-tokens")
+        print("\n   Options:")
+        print("   1. Export in your shell: export ED_API_TOKEN='your_token_here'")
+        print("   2. Create a .env file with: ED_API_TOKEN=your_token_here")
         return
     
-    if COURSE_ID == 'YOUR_COURSE_ID_HERE' or not COURSE_ID:
+    if not COURSE_ID or COURSE_ID == 'YOUR_COURSE_ID_HERE':
         print("❌ Error: Please update COURSE_ID in the script with your actual course ID")
         return
     
     # Initialize EdAPI
     print("🔐 Authenticating with Ed API...")
     try:
-        ed = EdAPI(API_TOKEN)
+        ed = EdAPI()
+        ed.login()
         user_info = ed.get_user_info()
         user = user_info.get('user', {})
         print(f"✅ Authenticated as {user.get('name', 'User')}")
@@ -287,30 +335,99 @@ def main():
         print("   Please check your API token")
         return
     
-    # Fetch threads
-    print(f"📚 Fetching threads from course {COURSE_ID}...")
-    try:
-        threads = ed.list_threads(course_id=COURSE_ID)
-        print(f"✅ Found {len(threads)} total threads")
-    except Exception as e:
-        print(f"❌ Error fetching threads: {e}")
-        return
+    # Fetch threads with pagination to get ALL threads, not just recent ones
+    print(f"📚 Fetching threads from course {COURSE_ID} (with pagination)...")
+    all_threads = []
+    page = 0
+    page_size = 50
+    seen_ids = set()
     
-    # Filter threads by title prefix
-    print(f"🔍 Filtering threads with titles starting with '{TITLE_PREFIX}'...")
+    try:
+        # Use the session to make direct API calls with pagination
+        base_url = "https://us.edstem.org/api/"
+        
+        while True:
+            # The Ed API uses offset-based pagination
+            offset = page * page_size
+            url = f"{base_url}courses/{COURSE_ID}/threads?limit={page_size}&offset={offset}"
+            
+            response = ed.session.get(url, headers=ed._auth_header)
+            response.raise_for_status()
+            data = response.json()
+            
+            if not isinstance(data, dict):
+                break
+                
+            page_threads = data.get("threads", [])
+            
+            if not page_threads:
+                break
+            
+            # Filter out duplicates
+            new_threads = [
+                t for t in page_threads 
+                if isinstance(t, dict) and t.get("id") not in seen_ids
+            ]
+            
+            for thread in new_threads:
+                thread_id = thread.get("id")
+                if thread_id:
+                    seen_ids.add(thread_id)
+            
+            all_threads.extend(new_threads)
+            print(f"   Fetched page {page + 1}: {len(new_threads)} threads (total so far: {len(all_threads)})")
+            
+            # If we got fewer threads than page_size, we've reached the end
+            if len(page_threads) < page_size:
+                break
+            
+            page += 1
+        
+        threads = all_threads
+        print(f"✅ Found {len(threads)} total threads (across {page + 1} pages)")
+    except Exception as e:
+        print(f"⚠️  Error with pagination, falling back to list_threads: {e}")
+        try:
+            threads = ed.list_threads(course_id=COURSE_ID)
+            print(f"✅ Found {len(threads)} total threads (using list_threads - may be limited)")
+        except Exception as e2:
+            print(f"❌ Error fetching threads: {e2}")
+            return
+    
+    # Filter threads by title
+    print(f"🔍 Filtering threads with titles containing '{TITLE_FILTER}' (case-insensitive)...")
     filtered_threads = [
         thread for thread in threads
-        if thread.get('title', '').startswith(TITLE_PREFIX)
+        if TITLE_FILTER.lower() in thread.get('title', '').lower()
     ]
     
     print(f"✅ Found {len(filtered_threads)} matching posts")
     
     if not filtered_threads:
         print("⚠️  No posts found matching the criteria")
+        return
+    
+    # Fetch full thread details for each filtered thread
+    print("📖 Fetching full thread details...")
+    detailed_threads = []
+    for thread in filtered_threads:
+        try:
+            thread_id = thread.get('id')
+            if thread_id:
+                # Get full thread details
+                full_thread = ed.get_thread(thread_id=thread_id)
+                if full_thread:
+                    detailed_threads.append(full_thread)
+        except Exception as e:
+            print(f"⚠️  Error fetching thread {thread_id}: {e}")
+            # Fall back to basic thread info
+            detailed_threads.append(thread)
+    
+    print(f"✅ Retrieved details for {len(detailed_threads)} threads")
     
     # Generate static website
     print("🌐 Generating static website...")
-    generate_static_website(filtered_threads, OUTPUT_DIR)
+    generate_static_website(detailed_threads, OUTPUT_DIR)
     
     print(f"\n🎉 Done! Your static website is ready in the '{OUTPUT_DIR}' directory")
     print(f"   Open {OUTPUT_DIR}/index.html in your browser to view it")
