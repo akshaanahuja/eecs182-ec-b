@@ -1,8 +1,14 @@
 # Environment variables
 .env
 
-# Output directory
-output/
+# Output directory - ignore large files but track essential ones
+output/pdfs/
+output/pdf_extractions.json
+!output/index.html
+!output/posts_analyzed.json
+!output/all_extractions.json
+!output/threads_full_raw.json
+!output/posts_raw.json
 
 # Python
 __pycache__/
